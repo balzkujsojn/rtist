@@ -496,6 +496,17 @@ local function attemptFire()
     
     local targetPos = targetPart.Position
     
+    -- Add random offset for boss to ensure hits register
+    if targetResult.Name == "Comet, the Mechanical Vengeance" then
+        -- Add small random offset (1-3 studs) in random direction
+        local randomOffset = Vector3.new(
+            math.random(-3, 3),
+            math.random(-2, 2),
+            math.random(-3, 3)
+        )
+        targetPos = targetPos + randomOffset
+    end
+    
     local camera = workspace.CurrentCamera
     if not camera then 
         return 
@@ -644,7 +655,7 @@ local function createPartyAndJoin()
             [2] = {
                 ["settings"] = {
                     ["Visual"] = true,
-                    ["FriendsOnly"] = true,
+                    ["FriendsOnly"] = false,
                     ["TormentMode"] = true
                 },
                 ["subplace"] = "ArcticZone"
