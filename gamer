@@ -138,46 +138,25 @@ local function useItem(itemName)
     
     -- Equip the item first
     humanoid:EquipTool(item)
+    task.wait(0.5)  -- Increased wait time to ensure tool is properly equipped
+    
+    -- Get the tool again after equipping (it might be in the character now)
+    item = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
+    if not item then return false end
+    
+    -- Try to use it by simulating a mouse click (Activate)
+    local success = pcall(function()
+        -- This simulates pressing the left mouse button while holding the tool
+        item:Activate()
+        task.wait(0.1)  -- Short wait to simulate button press
+        return true
+    end)
+    
+    -- Unequip after use
     task.wait(0.3)
-    
-    -- Try to use it (simulate click)
-    local remote = item:FindFirstChild("RemoteEvent") or item:FindFirstChild("RemoteFunction") or item:FindFirstChild("Activate")
-    if remote then
-        local success = pcall(function()
-            if remote:IsA("RemoteEvent") then
-                remote:FireServer()
-            elseif remote:IsA("RemoteFunction") then
-                remote:InvokeServer()
-            else
-                -- Try to call Activate if it's a click detector or similar
-                remote:FireServer()
-            end
-            return true
-        end)
-        
-        -- Unequip after use
-        task.wait(0.2)
-        humanoid:UnequipTools()
-        
-        return success
-    end
-    
-    -- Try alternative: some items might just need to be clicked
-    local clickDetector = item:FindFirstChildOfClass("ClickDetector")
-    if clickDetector then
-        local success = pcall(function()
-            fireclickdetector(clickDetector)
-            return true
-        end)
-        
-        task.wait(0.2)
-        humanoid:UnequipTools()
-        
-        return success
-    end
-    
     humanoid:UnequipTools()
-    return false
+    
+    return success
 end
 
 local function checkNpcSpawned()
@@ -189,16 +168,23 @@ local function checkNpcSpawned()
 end
 
 local function useSpawnItems()
+    -- Check which NPCs have spawned BEFORE trying to use items
     checkNpcSpawned()
     
     -- Use items only if corresponding NPC hasn't spawned
     for itemName, npcName in pairs(ITEM_TO_NPC) do
         if not State.npcSpawned[npcName] and not State.itemsUsed[itemName] then
+            print("Attempting to use item:", itemName, "to spawn NPC:", npcName)
             local success = useItem(itemName)
             if success then
                 State.itemsUsed[itemName] = true
-                task.wait(1)  -- Wait for NPC to spawn
+                print("Successfully used item:", itemName)
+                task.wait(2)  -- Increased wait time for NPC to spawn
                 checkNpcSpawned()  -- Re-check after using item
+            else
+                print("Failed to use item:", itemName)
+                -- Still mark as used so we don't retry
+                State.itemsUsed[itemName] = true
             end
         end
     end
@@ -848,9 +834,6 @@ local function onCharacterAdded(character)
     task.wait(2)
     
     if game.PlaceId == SPECIFIC_PLACE_ID then
-        -- Use spawn items immediately
-        useSpawnItems()
-        
         -- Send skip command
         if not State.skipAllSaid then
             sendSkipCommands()
@@ -860,6 +843,16 @@ local function onCharacterAdded(character)
         task.wait(1)
         if not State.teleported then
             teleportToPlatform()
+        end
+        
+        -- Wait a bit for everything to load, then use spawn items
+        task.wait(3)
+        
+        -- Use spawn items only once when character is added
+        if not State.itemsUsed["Equinox Seal"] and 
+           not State.itemsUsed["Aromatic Seagrass"] and 
+           not State.itemsUsed["Ominous Dark Egg"] then
+            useSpawnItems()
         end
     end
     
