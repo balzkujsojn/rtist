@@ -15,7 +15,7 @@ local CONFIG = {
     REMOTE_NAME = "RemoteFunction"
 }
 
--- Ignored enemies list
+-- Ignored enemies list (these are our allies now)
 local IGNORE_ENEMIES = {
     ["Champion of the Equinox"] = true,
     ["Fiscus"] = true,
@@ -29,6 +29,13 @@ local PRIORITY_ENEMIES = {
     ["Comet, the Mechanical Vengeance"] = true
 }
 
+-- Item to NPC mapping
+local ITEM_TO_NPC = {
+    ["Equinox Seal"] = "Champion of the Equinox",
+    ["Aromatic Seagrass"] = "Shellshock", 
+    ["Ominous Dark Egg"] = "Fiscus"
+}
+
 -- Place IDs
 local SPECIFIC_PLACE_ID = 112802237735950
 local AUTOTELEPORT_PLACE_ID = 8811271345
@@ -36,9 +43,6 @@ local AUTOTELEPORT_PLACE_ID = 8811271345
 -- Platform position
 local PLATFORM_POSITION = Vector3.new(-251, 130, 3783)
 local PLATFORM_SIZE = Vector3.new(20, 5, 20)  -- 20x20 platform with 5 studs height
-
--- Boss target part
-local BOSS_TARGET_PART = "Torso"
 
 -- State management
 local State = {
@@ -53,7 +57,16 @@ local State = {
     skipSaid = false,
     skipAllSaid = false,
     teleported = false,
-    itemsUsed = false,
+    itemsUsed = {
+        ["Equinox Seal"] = false,
+        ["Aromatic Seagrass"] = false,
+        ["Ominous Dark Egg"] = false
+    },
+    npcSpawned = {
+        ["Champion of the Equinox"] = false,
+        ["Shellshock"] = false,
+        ["Fiscus"] = false
+    },
     rewardCollected = false,
     rewardPresentSpawned = false,
     rewardTaken = false,
@@ -112,51 +125,83 @@ local function sendSkipCommands()
 end
 
 local function useItem(itemName)
+    local character = player.Character
     local backpack = player:FindFirstChild("Backpack")
-    if not backpack then return false end
     
-    local item = backpack:FindFirstChild(itemName)
+    if not character or not backpack then return false end
+    
+    local item = backpack:FindFirstChild(itemName) or character:FindFirstChild(itemName)
     if not item then return false end
     
-    local remote = item:FindFirstChild("RemoteEvent") or item:FindFirstChild("RemoteFunction")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    
+    -- Equip the item first
+    humanoid:EquipTool(item)
+    task.wait(0.3)
+    
+    -- Try to use it (simulate click)
+    local remote = item:FindFirstChild("RemoteEvent") or item:FindFirstChild("RemoteFunction") or item:FindFirstChild("Activate")
     if remote then
         local success = pcall(function()
             if remote:IsA("RemoteEvent") then
                 remote:FireServer()
-            else
+            elseif remote:IsA("RemoteFunction") then
                 remote:InvokeServer()
+            else
+                -- Try to call Activate if it's a click detector or similar
+                remote:FireServer()
             end
+            return true
         end)
+        
+        -- Unequip after use
+        task.wait(0.2)
+        humanoid:UnequipTools()
+        
         return success
     end
+    
+    -- Try alternative: some items might just need to be clicked
+    local clickDetector = item:FindFirstChildOfClass("ClickDetector")
+    if clickDetector then
+        local success = pcall(function()
+            fireclickdetector(clickDetector)
+            return true
+        end)
+        
+        task.wait(0.2)
+        humanoid:UnequipTools()
+        
+        return success
+    end
+    
+    humanoid:UnequipTools()
     return false
 end
 
+local function checkNpcSpawned()
+    -- Check which NPCs have spawned
+    for npcName, _ in pairs(State.npcSpawned) do
+        local npc = workspace:FindFirstChild(npcName)
+        State.npcSpawned[npcName] = npc ~= nil
+    end
+end
+
 local function useSpawnItems()
-    if State.itemsUsed then return end
+    checkNpcSpawned()
     
-    -- Check if enemies already spawned
-    local fiscus = workspace:FindFirstChild("Fiscus")
-    local shellshock = workspace:FindFirstChild("Shellshock")
-    local champion = workspace:FindFirstChild("Champion of the Equinox")
-    
-    -- Only use items if enemies haven't spawned
-    if not fiscus then
-        useItem("Ominous Dark Egg")
-        task.wait(0.5)
+    -- Use items only if corresponding NPC hasn't spawned
+    for itemName, npcName in pairs(ITEM_TO_NPC) do
+        if not State.npcSpawned[npcName] and not State.itemsUsed[itemName] then
+            local success = useItem(itemName)
+            if success then
+                State.itemsUsed[itemName] = true
+                task.wait(1)  -- Wait for NPC to spawn
+                checkNpcSpawned()  -- Re-check after using item
+            end
+        end
     end
-    
-    if not shellshock then
-        useItem("Aromatic Seagrass")
-        task.wait(0.5)
-    end
-    
-    if not champion then
-        useItem("Equinox Seal")
-        task.wait(0.5)
-    end
-    
-    State.itemsUsed = true
 end
 
 local function createPlatform()
@@ -236,15 +281,24 @@ end
 local function getTargetPart(model)
     local enemyName = model.Name
     
-    -- Special handling for Comet boss
+    -- Special handling for Comet boss - look for Body meshpart in MainBody
     if enemyName == "Comet, the Mechanical Vengeance" then
-        local torso = model:FindFirstChild(BOSS_TARGET_PART)
+        local mainBody = model:FindFirstChild("MainBody")
+        if mainBody then
+            local bodyPart = mainBody:FindFirstChild("Body")
+            if bodyPart and bodyPart:IsA("BasePart") then
+                return bodyPart
+            end
+        end
+        
+        -- Fallback to Torso if Body not found
+        local torso = model:FindFirstChild("Torso")
         if torso then
             return torso
         end
     end
     
-    -- Default part search
+    -- Default part search for other enemies
     local possibleParts = {
         "HumanoidRootPart",
         "Head",
@@ -288,7 +342,7 @@ local function findEnemies()
     
     for _, model in ipairs(cache.workspaceChildren) do
         if model:IsA("Model") and model.Parent == workspace then
-            -- Skip ignored enemies
+            -- Skip ignored enemies (our allies)
             if IGNORE_ENEMIES[model.Name] then
                 continue
             end
@@ -443,6 +497,36 @@ local function equipTool()
             humanoid:EquipTool(tool)
             return true
         end
+    end
+    
+    return false
+end
+
+local function equipArcticCore()
+    local character = player.Character
+    if not character then return false end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    
+    -- Check if Arctic Core is in character
+    local arcticCore = character:FindFirstChild("Arctic Core")
+    if not arcticCore then
+        -- Check backpack
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            arcticCore = backpack:FindFirstChild("Arctic Core")
+            if arcticCore then
+                arcticCore.Parent = character
+                task.wait(0.2)
+            end
+        end
+    end
+    
+    if arcticCore then
+        humanoid:EquipTool(arcticCore)
+        task.wait(0.5)
+        return true
     end
     
     return false
@@ -673,6 +757,19 @@ local function handleAutoTeleport()
     
     task.wait(2)
     
+    -- Equip Arctic Core first
+    local equipped = equipArcticCore()
+    if not equipped then
+        State.bossCompleted = false
+        State.specialMode = false
+        State.isRunning = true
+        State.shootingEnabled = true
+        State.autoTeleportTriggered = false
+        return
+    end
+    
+    task.wait(1)
+    
     -- Create party and join directly
     local success = createPartyAndJoin()
     
@@ -690,6 +787,8 @@ local function farmingLoop()
     local bossCheckInterval = 2
     local lastRewardCheck = 0
     local rewardCheckInterval = 1
+    local lastItemCheck = 0
+    local itemCheckInterval = 5
     
     while State.isRunning and not State.bossCompleted do
         local now = tick()
@@ -700,6 +799,12 @@ local function farmingLoop()
             if checkAutoTeleport() then
                 handleAutoTeleport()
                 break
+            end
+            
+            -- Periodically check and use spawn items
+            if now - lastItemCheck > itemCheckInterval then
+                useSpawnItems()
+                lastItemCheck = now
             end
             
             if now - lastBossCheck > bossCheckInterval then
@@ -743,7 +848,7 @@ local function onCharacterAdded(character)
     task.wait(2)
     
     if game.PlaceId == SPECIFIC_PLACE_ID then
-        -- Use spawn items
+        -- Use spawn items immediately
         useSpawnItems()
         
         -- Send skip command
@@ -844,6 +949,7 @@ return {
             ShootingEnabled = State.shootingEnabled,
             ShootingErrors = State.shootingErrors,
             ItemsUsed = State.itemsUsed,
+            NPCSpawned = State.npcSpawned,
             RewardSpawned = State.rewardPresentSpawned,
             RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
@@ -863,5 +969,9 @@ return {
         State.shootingErrors = 0
         State.lastFireTime = 0
         equipTool()
+    end,
+    
+    UseSpawnItems = function()
+        useSpawnItems()
     end
 }
