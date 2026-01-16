@@ -139,6 +139,33 @@ local function sendSkipCommands()
     end)
 end
 
+local function findRemoteFunction()
+    -- Try to find the RemoteFunction in different locations
+    local locations = {
+        player,
+        ReplicatedStorage,
+        workspace
+    }
+    
+    for _, location in ipairs(locations) do
+        local remote = location:FindFirstChild("RemoteFunction")
+        if remote and remote:IsA("RemoteFunction") then
+            return remote
+        end
+    end
+    
+    -- Also check in Remotes folder
+    local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
+    if remotesFolder then
+        local remote = remotesFolder:FindFirstChild("RemoteFunction")
+        if remote and remote:IsA("RemoteFunction") then
+            return remote
+        end
+    end
+    
+    return nil
+end
+
 local function useItem(itemName)
     local npcData = ITEM_TO_NPC[itemName]
     if not npcData then return false end
@@ -158,44 +185,53 @@ local function useItem(itemName)
     humanoid:EquipTool(item)
     task.wait(0.5)  -- Wait to ensure tool is properly equipped
     
-    -- For Equinox Seal and Aromatic Seagrass, use the RemoteFunction
+    -- For all items, try to find and use the proper remote
+    local success = false
+    
     if itemName == "Equinox Seal" or itemName == "Aromatic Seagrass" then
-        local success = pcall(function()
-            local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
-            if not torso then return false end
-            
-            local args = {
-                [1] = npcData.remoteArg,
-                [2] = {
-                    [1] = npcData.spawnPosition,
-                    [2] = torso
+        -- Try to find the remote function
+        local remoteFunction = findRemoteFunction()
+        
+        if remoteFunction then
+            success = pcall(function()
+                local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+                if not torso then return false end
+                
+                local args = {
+                    [1] = npcData.remoteArg,
+                    [2] = {
+                        [1] = npcData.spawnPosition,
+                        [2] = torso
+                    }
                 }
-            }
-            
-            local remoteFunction = player:WaitForChild("RemoteFunction")
-            remoteFunction:InvokeServer(unpack(args))
-            return true
-        end)
+                
+                remoteFunction:InvokeServer(unpack(args))
+                return true
+            end)
+        end
         
-        -- Unequip after use
-        task.wait(0.3)
-        humanoid:UnequipTools()
-        
-        return success
+        if not success then
+            -- Fallback: try to use Activate method
+            success = pcall(function()
+                item:Activate()
+                task.wait(0.1)
+                return true
+            end)
+        end
     else
         -- For Ominous Dark Egg, use Activate
-        local success = pcall(function()
+        success = pcall(function()
             item:Activate()
             task.wait(0.1)
             return true
         end)
-        
-        -- Unequip after use
-        task.wait(0.3)
-        humanoid:UnequipTools()
-        
-        return success
     end
+    
+    -- Unequip after use
+    task.wait(0.3)
+    humanoid:UnequipTools()
+    
+    return success
 end
 
 local function checkNpcSpawned()
