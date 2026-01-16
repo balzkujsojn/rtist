@@ -61,7 +61,9 @@ local State = {
     shootingEnabled = true,
     shootingErrors = 0,
     maxShootingErrors = 5,
-    platformCreated = false
+    platformCreated = false,
+    dungeonTeleportAttempts = 0,
+    maxDungeonAttempts = 3
 }
 
 local cache = {
@@ -581,52 +583,9 @@ local function collectReward()
     return true
 end
 
-local function attemptArcticTeleport()
-    if State.bossCompleted then 
-        return 
-    end
-    
-    State.bossCompleted = true
-    State.specialMode = true
-    State.isRunning = false
-    State.shootingEnabled = false
-    
-    task.wait(5)  -- Wait after reward taken
-    
-    -- Unequip cannon
-    local tool = getValidTool()
-    if tool and tool.Tool then
-        tool.Tool.Parent = player.Backpack
-    end
-    
-    task.wait(1)
-    
-    -- Equip Arctic Core
-    local character = player.Character
-    if character then
-        local arcticCore = character:FindFirstChild("Arctic Core")
-        if not arcticCore then
-            local backpack = player:FindFirstChild("Backpack")
-            if backpack then
-                arcticCore = backpack:FindFirstChild("Arctic Core")
-                if arcticCore then
-                    arcticCore.Parent = character
-                end
-            end
-        end
-        
-        if arcticCore then
-            local humanoid = character:FindFirstChildOfClass("Humanoid")
-            if humanoid then
-                humanoid:EquipTool(arcticCore)
-            end
-        end
-    end
-    
-    task.wait(2)
-    
-    -- Create party and teleport
-    local success = pcall(function()
+local function createPartyAndJoin()
+    -- First create the party
+    local createSuccess = pcall(function()
         local args = {
             [1] = "createParty",
             [2] = {
@@ -644,17 +603,85 @@ local function attemptArcticTeleport()
         return true
     end)
     
+    if not createSuccess then
+        return false
+    end
+    
+    task.wait(2)
+    
+    -- Then join the subplace
+    local joinSuccess = pcall(function()
+        local args = {
+            [1] = "joinSubplace",
+            [2] = {}
+        }
+        
+        local partyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PartySystem"):WaitForChild("PartyFunction")
+        partyRemote:InvokeServer(unpack(args))
+        return true
+    end)
+    
+    return joinSuccess
+end
+
+local function attemptArcticTeleport()
+    if State.bossCompleted then 
+        return true
+    end
+    
+    State.bossCompleted = true
+    State.specialMode = true
+    State.isRunning = false
+    State.shootingEnabled = false
+    
+    -- Wait after reward taken
+    task.wait(5)
+    
+    -- Unequip cannon
+    local tool = getValidTool()
+    if tool and tool.Tool then
+        tool.Tool.Parent = player.Backpack
+    end
+    
+    task.wait(1)
+    
+    -- Try to teleport to dungeon
+    local success = false
+    for attempt = 1, State.maxDungeonAttempts do
+        State.dungeonTeleportAttempts = attempt
+        
+        success = createPartyAndJoin()
+        
+        if success then
+            break
+        end
+        
+        if attempt < State.maxDungeonAttempts then
+            task.wait(3)
+        end
+    end
+    
     return success
 end
 
-local function handleArcticTeleport()
-    local success = attemptArcticTeleport()
+local function handleAutoTeleport()
+    -- This handles auto-teleport from AUTOTELEPORT_PLACE_ID
+    State.bossCompleted = true
+    State.specialMode = true
+    State.isRunning = false
+    State.shootingEnabled = false
+    
+    task.wait(2)
+    
+    -- Create party and join directly
+    local success = createPartyAndJoin()
     
     if not success then
         State.bossCompleted = false
         State.specialMode = false
         State.isRunning = true
         State.shootingEnabled = true
+        State.autoTeleportTriggered = false
     end
 end
 
@@ -671,7 +698,7 @@ local function farmingLoop()
         
         if State.playerAlive then
             if checkAutoTeleport() then
-                handleArcticTeleport()
+                handleAutoTeleport()
                 break
             end
             
@@ -694,7 +721,7 @@ local function farmingLoop()
                     if rewardStatus == "exists" and not State.rewardTaken then
                         collectReward()
                     elseif rewardStatus == "taken" then
-                        handleArcticTeleport()
+                        attemptArcticTeleport()
                         break
                     end
                     
@@ -820,13 +847,14 @@ return {
             RewardSpawned = State.rewardPresentSpawned,
             RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
-            Teleported = State.teleported
+            Teleported = State.teleported,
+            DungeonAttempts = State.dungeonTeleportAttempts
         }
     end,
     
     TriggerDungeon = function()
         if not State.bossCompleted then
-            handleArcticTeleport()
+            attemptArcticTeleport()
         end
     end,
     
