@@ -29,25 +29,6 @@ local PRIORITY_ENEMIES = {
     ["Comet, the Mechanical Vengeance"] = true
 }
 
--- Item to NPC mapping with spawn data
-local ITEM_TO_NPC = {
-    ["Equinox Seal"] = {
-        name = "Champion of the Equinox",
-        remoteArg = "Twilight",
-        spawnPosition = Vector3.new(-90.90042114257812, 10.091531753540039, 64.10246276855469)
-    },
-    ["Aromatic Seagrass"] = {
-        name = "Shellshock",
-        remoteArg = "Shellshock",
-        spawnPosition = Vector3.new(-81.57182312011719, 9.976997375488281, 48.956748962402344)
-    },
-    ["Ominous Dark Egg"] = {
-        name = "Fiscus",
-        remoteArg = "Fiscus",
-        spawnPosition = Vector3.new(-90, 10, 60)  -- Default position for Fiscus
-    }
-}
-
 -- Place IDs
 local SPECIFIC_PLACE_ID = 112802237735950
 local AUTOTELEPORT_PLACE_ID = 8811271345
@@ -69,29 +50,20 @@ local State = {
     skipSaid = false,
     skipAllSaid = false,
     teleported = false,
-    itemsUsed = {
-        ["Equinox Seal"] = false,
-        ["Aromatic Seagrass"] = false,
-        ["Ominous Dark Egg"] = false
-    },
-    npcSpawned = {
-        ["Champion of the Equinox"] = false,
-        ["Shellshock"] = false,
-        ["Fiscus"] = false
-    },
     rewardCollected = false,
     rewardPresentSpawned = false,
     rewardTaken = false,
     autoTeleportTriggered = false,
     shootingEnabled = true,
     shootingErrors = 0,
-    maxShootingErrors = 5,
+    maxShootingErrors = 10,
     platformCreated = false,
     dungeonTeleportAttempts = 0,
     maxDungeonAttempts = 3,
     bossDefeatedTime = 0,
     waitingForReward = false,
-    rewardCheckStarted = false
+    lastToolEquipTime = 0,
+    toolEquipCooldown = 2
 }
 
 local cache = {
@@ -137,133 +109,6 @@ local function sendSkipCommands()
         chatMessage("/skipall")
         State.skipAllSaid = true
     end)
-end
-
-local function findRemoteFunction()
-    -- Try to find the RemoteFunction in different locations
-    local locations = {
-        player,
-        ReplicatedStorage,
-        workspace
-    }
-    
-    for _, location in ipairs(locations) do
-        local remote = location:FindFirstChild("RemoteFunction")
-        if remote and remote:IsA("RemoteFunction") then
-            return remote
-        end
-    end
-    
-    -- Also check in Remotes folder
-    local remotesFolder = ReplicatedStorage:FindFirstChild("Remotes")
-    if remotesFolder then
-        local remote = remotesFolder:FindFirstChild("RemoteFunction")
-        if remote and remote:IsA("RemoteFunction") then
-            return remote
-        end
-    end
-    
-    return nil
-end
-
-local function useItem(itemName)
-    local npcData = ITEM_TO_NPC[itemName]
-    if not npcData then return false end
-    
-    local character = player.Character
-    local backpack = player:FindFirstChild("Backpack")
-    
-    if not character or not backpack then return false end
-    
-    local item = backpack:FindFirstChild(itemName) or character:FindFirstChild(itemName)
-    if not item then return false end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    
-    -- Equip the item first
-    humanoid:EquipTool(item)
-    task.wait(0.5)  -- Wait to ensure tool is properly equipped
-    
-    -- For all items, try to find and use the proper remote
-    local success = false
-    
-    if itemName == "Equinox Seal" or itemName == "Aromatic Seagrass" then
-        -- Try to find the remote function
-        local remoteFunction = findRemoteFunction()
-        
-        if remoteFunction then
-            success = pcall(function()
-                local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
-                if not torso then return false end
-                
-                local args = {
-                    [1] = npcData.remoteArg,
-                    [2] = {
-                        [1] = npcData.spawnPosition,
-                        [2] = torso
-                    }
-                }
-                
-                remoteFunction:InvokeServer(unpack(args))
-                return true
-            end)
-        end
-        
-        if not success then
-            -- Fallback: try to use Activate method
-            success = pcall(function()
-                item:Activate()
-                task.wait(0.1)
-                return true
-            end)
-        end
-    else
-        -- For Ominous Dark Egg, use Activate
-        success = pcall(function()
-            item:Activate()
-            task.wait(0.1)
-            return true
-        end)
-    end
-    
-    -- Unequip after use
-    task.wait(0.3)
-    humanoid:UnequipTools()
-    
-    return success
-end
-
-local function checkNpcSpawned()
-    -- Check which NPCs have spawned
-    for npcName, _ in pairs(State.npcSpawned) do
-        local npc = workspace:FindFirstChild(npcName)
-        State.npcSpawned[npcName] = npc ~= nil
-    end
-end
-
-local function useSpawnItems()
-    -- Check which NPCs have spawned BEFORE trying to use items
-    checkNpcSpawned()
-    
-    -- Use items only if corresponding NPC hasn't spawned
-    for itemName, npcData in pairs(ITEM_TO_NPC) do
-        local npcName = npcData.name
-        if not State.npcSpawned[npcName] and not State.itemsUsed[itemName] then
-            print("Attempting to use item:", itemName, "to spawn NPC:", npcName)
-            local success = useItem(itemName)
-            if success then
-                State.itemsUsed[itemName] = true
-                print("Successfully used item:", itemName)
-                task.wait(2)  -- Wait for NPC to spawn
-                checkNpcSpawned()  -- Re-check after using item
-            else
-                print("Failed to use item:", itemName)
-                -- Still mark as used so we don't retry
-                State.itemsUsed[itemName] = true
-            end
-        end
-    end
 end
 
 local function createPlatform()
@@ -527,26 +372,33 @@ local function getValidTool()
 end
 
 local function equipTool()
+    local now = tick()
+    
     if not State.playerAlive then 
         task.wait(0.5)
+        return equipTool()
+    end
+    
+    if now - State.lastToolEquipTime < State.toolEquipCooldown then
         return false
     end
     
     local character = player.Character
     if not character then 
         task.wait(0.5)
-        return false
+        return equipTool()
     end
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid then 
         task.wait(0.5)
-        return false
+        return equipTool()
     end
     
     local tool = character:FindFirstChild(CONFIG.TOOL_NAME)
     if tool then
         humanoid:EquipTool(tool)
+        State.lastToolEquipTime = now
         return true
     end
     
@@ -557,38 +409,9 @@ local function equipTool()
             tool.Parent = character
             task.wait(0.1)
             humanoid:EquipTool(tool)
+            State.lastToolEquipTime = now
             return true
         end
-    end
-    
-    return false
-end
-
-local function equipArcticCore()
-    local character = player.Character
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    
-    -- Check if Arctic Core is in character
-    local arcticCore = character:FindFirstChild("Arctic Core")
-    if not arcticCore then
-        -- Check backpack
-        local backpack = player:FindFirstChild("Backpack")
-        if backpack then
-            arcticCore = backpack:FindFirstChild("Arctic Core")
-            if arcticCore then
-                arcticCore.Parent = character
-                task.wait(0.2)
-            end
-        end
-    end
-    
-    if arcticCore then
-        humanoid:EquipTool(arcticCore)
-        task.wait(0.5)
-        return true
     end
     
     return false
@@ -602,22 +425,61 @@ local function attemptFire()
         return 
     end
     
-    State.currentTarget = selectTarget()
-    if not State.currentTarget then
+    local success, targetResult = pcall(function()
+        State.currentTarget = selectTarget()
+        return State.currentTarget
+    end)
+    
+    if not success then
+        State.shootingErrors = State.shootingErrors + 1
+        if State.shootingErrors > State.maxShootingErrors then
+            State.shootingEnabled = false
+            task.wait(5)
+            State.shootingEnabled = true
+            State.shootingErrors = 0
+        end
         return
     end
     
-    local toolData = getValidTool()
-    if not toolData then 
-        local equipped = equipTool()
-        if not equipped then 
+    if not targetResult then
+        return
+    end
+    
+    local toolData
+    local toolSuccess, toolResult = pcall(function()
+        toolData = getValidTool()
+        return toolData
+    end)
+    
+    if not toolSuccess then
+        State.shootingErrors = State.shootingErrors + 1
+        return
+    end
+    
+    if not toolResult then 
+        local equipSuccess, equipResult = pcall(function()
+            return equipTool()
+        end)
+        
+        if not equipSuccess then
+            State.shootingErrors = State.shootingErrors + 1
+            return
+        end
+        
+        if not equipResult then 
             return 
         end
         
-        toolData = getValidTool()
-        if not toolData then 
+        local toolRetrySuccess, toolRetryResult = pcall(function()
+            toolData = getValidTool()
+            return toolData
+        end)
+        
+        if not toolRetrySuccess or not toolRetryResult then 
             return 
         end
+        
+        toolData = toolRetryResult
     end
     
     local now = tick()
@@ -627,7 +489,7 @@ local function attemptFire()
     
     State.lastFireTime = now
     
-    local targetPart = State.currentTarget.TargetPart
+    local targetPart = targetResult.TargetPart
     if not targetPart then
         return
     end
@@ -654,13 +516,51 @@ local function attemptFire()
         
         if State.shootingErrors > State.maxShootingErrors then
             State.shootingEnabled = false
-            task.wait(2)
+            task.wait(3)
             State.shootingEnabled = true
             State.shootingErrors = 0
         end
     else
         State.shootingErrors = 0
     end
+end
+
+local function equipArcticCore()
+    local character = player.Character
+    if not character then return false end
+    
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return false end
+    
+    -- First unequip Equinox Cannon if equipped
+    local cannon = character:FindFirstChild(CONFIG.TOOL_NAME)
+    if cannon then
+        cannon.Parent = player.Backpack
+    end
+    
+    task.wait(0.5)
+    
+    -- Check if Arctic Core is in character
+    local arcticCore = character:FindFirstChild("Arctic Core")
+    if not arcticCore then
+        -- Check backpack
+        local backpack = player:FindFirstChild("Backpack")
+        if backpack then
+            arcticCore = backpack:FindFirstChild("Arctic Core")
+            if arcticCore then
+                arcticCore.Parent = character
+                task.wait(0.2)
+            end
+        end
+    end
+    
+    if arcticCore then
+        humanoid:EquipTool(arcticCore)
+        task.wait(0.5)
+        return true
+    end
+    
+    return false
 end
 
 local function checkBossStatus()
@@ -779,13 +679,25 @@ local function attemptArcticTeleport()
     -- Wait after reward taken
     task.wait(5)
     
-    -- Unequip cannon
-    local tool = getValidTool()
-    if tool and tool.Tool then
-        tool.Tool.Parent = player.Backpack
+    -- Unequip cannon first
+    local character = player.Character
+    if character then
+        local cannon = character:FindFirstChild(CONFIG.TOOL_NAME)
+        if cannon then
+            cannon.Parent = player.Backpack
+        end
     end
     
     task.wait(1)
+    
+    -- Equip Arctic Core
+    local equipped = equipArcticCore()
+    if not equipped then
+        -- If Arctic Core not found, try to teleport anyway
+        print("Arctic Core not found, attempting teleport anyway...")
+    end
+    
+    task.wait(2)
     
     -- Try to teleport to dungeon
     local success = false
@@ -845,8 +757,6 @@ local function farmingLoop()
     local bossCheckInterval = 2
     local lastRewardCheck = 0
     local rewardCheckInterval = 1
-    local lastItemCheck = 0
-    local itemCheckInterval = 5
     
     while State.isRunning and not State.bossCompleted do
         local now = tick()
@@ -857,12 +767,6 @@ local function farmingLoop()
             if checkAutoTeleport() then
                 handleAutoTeleport()
                 break
-            end
-            
-            -- Periodically check and use spawn items
-            if now - lastItemCheck > itemCheckInterval then
-                useSpawnItems()
-                lastItemCheck = now
             end
             
             if now - lastBossCheck > bossCheckInterval then
@@ -911,15 +815,6 @@ local function onCharacterAdded(character)
     task.wait(2)
     
     if game.PlaceId == SPECIFIC_PLACE_ID then
-        -- First use spawn items before teleporting
-        if not State.itemsUsed["Equinox Seal"] and 
-           not State.itemsUsed["Aromatic Seagrass"] and 
-           not State.itemsUsed["Ominous Dark Egg"] then
-            task.wait(1)
-            useSpawnItems()
-            task.wait(1)  -- Wait for NPCs to spawn
-        end
-        
         -- Send skip command
         if not State.skipAllSaid then
             sendSkipCommands()
@@ -937,6 +832,9 @@ local function onCharacterAdded(character)
             equipTool()
         end
     end
+    
+    State.shootingEnabled = true
+    State.shootingErrors = 0
 end
 
 local function initialize()
@@ -1017,8 +915,6 @@ return {
             PlayerAlive = State.playerAlive,
             ShootingEnabled = State.shootingEnabled,
             ShootingErrors = State.shootingErrors,
-            ItemsUsed = State.itemsUsed,
-            NPCSpawned = State.npcSpawned,
             RewardSpawned = State.rewardPresentSpawned,
             RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
@@ -1039,9 +935,5 @@ return {
         State.shootingErrors = 0
         State.lastFireTime = 0
         equipTool()
-    end,
-    
-    UseSpawnItems = function()
-        useSpawnItems()
     end
 }
