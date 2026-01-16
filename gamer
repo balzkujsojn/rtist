@@ -563,25 +563,29 @@ local function equipArcticCore()
     return false
 end
 
-local function checkBossStatus()
+local function checkBossDead()
+    -- Check if Comet is completely gone from workspace (not just dead, but removed)
     local comet = workspace:FindFirstChild("Comet, the Mechanical Vengeance")
     
-    if comet then
-        State.bossHasSpawned = true
-        
-        local humanoid = comet:FindFirstChildOfClass("Humanoid")
-        if humanoid then
-            if humanoid.Health <= 0 then
-                return "dead"
-            else
-                return "alive"
-            end
-        else
-            return "spawning"
-        end
-    else
-        return "not_spawned"
+    if not comet then
+        -- Comet has been removed from workspace (completely dead)
+        State.bossHasSpawned = false
+        return true
     end
+    
+    -- Comet still exists, check if it's alive
+    local humanoid = comet:FindFirstChildOfClass("Humanoid")
+    if humanoid and humanoid.Health <= 0 then
+        -- Comet is dead but still in workspace (might be in death animation)
+        return true
+    end
+    
+    return false
+end
+
+local function anyEnemiesLeft()
+    local enemies = findEnemies()
+    return #enemies > 0
 end
 
 local function checkRewardPresent()
@@ -590,14 +594,14 @@ local function checkRewardPresent()
     if present then
         State.rewardPresentSpawned = true
         
-        -- Check if present has been taken (model still exists but might be empty)
+        -- Check if present has been taken (meshpart "Present" exists)
         local mesh = present:FindFirstChild("Present")
-        if not mesh then
+        if mesh and mesh:IsA("MeshPart") then
+            return "exists"
+        else
             State.rewardTaken = true
             return "taken"
         end
-        
-        return "exists"
     else
         if State.rewardPresentSpawned and not State.rewardTaken then
             State.rewardTaken = true
@@ -612,7 +616,7 @@ local function collectReward()
     if not present then return false end
     
     local mesh = present:FindFirstChild("Present")
-    if not mesh then return false end
+    if not mesh or not mesh:IsA("MeshPart") then return false end
     
     local char = player.Character
     if not char then return false end
@@ -620,9 +624,12 @@ local function collectReward()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
     
-    -- Teleport to the present
+    -- Wait 5 seconds before teleporting to reward
+    task.wait(5)
+    
+    -- Teleport to the present meshpart
     local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local targetCFrame = CFrame.new(present.Position + Vector3.new(0, 3, 0))
+    local targetCFrame = CFrame.new(mesh.Position + Vector3.new(0, 2, 0))
     local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
     tween:Play()
     
@@ -675,9 +682,6 @@ local function attemptArcticTeleport()
     State.specialMode = true
     State.isRunning = false
     State.shootingEnabled = false
-    
-    -- Wait after reward taken
-    task.wait(5)
     
     -- Unequip cannon first
     local character = player.Character
@@ -770,13 +774,19 @@ local function farmingLoop()
             end
             
             if now - lastBossCheck > bossCheckInterval then
-                local bossStatus = checkBossStatus()
+                local bossDead = checkBossDead()
                 
-                if State.bossHasSpawned and bossStatus == "dead" and not State.bossCompleted then
-                    -- Boss died, start checking for reward
-                    State.bossCompleted = true
-                    State.bossDefeatedTime = now
-                    State.waitingForReward = true
+                if bossDead and not State.bossCompleted then
+                    -- Boss is dead, continue shooting other enemies
+                    State.bossHasSpawned = false
+                    
+                    -- Check if there are still enemies left
+                    if not anyEnemiesLeft() then
+                        -- No enemies left, start checking for reward
+                        State.bossCompleted = true
+                        State.bossDefeatedTime = now
+                        State.waitingForReward = true
+                    end
                 end
                 
                 lastBossCheck = now
@@ -798,10 +808,8 @@ local function farmingLoop()
                     lastRewardCheck = now
                 end
             else
-                -- Normal farming - continue shooting even after boss death if not waiting for reward
-                if not State.bossCompleted then
-                    attemptFire()
-                end
+                -- Normal farming - continue shooting all enemies (including after boss death)
+                attemptFire()
             end
         else
             State.currentTarget = nil
@@ -920,7 +928,8 @@ return {
             PlatformCreated = State.platformCreated,
             Teleported = State.teleported,
             DungeonAttempts = State.dungeonTeleportAttempts,
-            WaitingForReward = State.waitingForReward
+            WaitingForReward = State.waitingForReward,
+            EnemiesLeft = anyEnemiesLeft()
         }
     end,
     
