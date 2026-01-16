@@ -62,9 +62,10 @@ local State = {
     dungeonTeleportAttempts = 0,
     maxDungeonAttempts = 3,
     bossDefeatedTime = 0,
-    waitingForReward = false,
+    waitingForTeleport = false,
     lastToolEquipTime = 0,
-    toolEquipCooldown = 2
+    toolEquipCooldown = 2,
+    teleportTimerStarted = false
 }
 
 local cache = {
@@ -614,54 +615,6 @@ local function anyEnemiesLeft()
     return #enemies > 0
 end
 
-local function checkRewardPresent()
-    local present = workspace:FindFirstChild("RewardPresent")
-    
-    if present then
-        State.rewardPresentSpawned = true
-        
-        -- Check if present has been taken (meshpart "Present" exists)
-        local mesh = present:FindFirstChild("Present")
-        if mesh and mesh:IsA("MeshPart") then
-            return "exists"
-        else
-            State.rewardTaken = true
-            return "taken"
-        end
-    else
-        if State.rewardPresentSpawned and not State.rewardTaken then
-            State.rewardTaken = true
-            return "taken"
-        end
-        return "not_found"
-    end
-end
-
-local function collectReward()
-    local present = workspace:FindFirstChild("RewardPresent")
-    if not present then return false end
-    
-    local mesh = present:FindFirstChild("Present")
-    if not mesh or not mesh:IsA("MeshPart") then return false end
-    
-    local char = player.Character
-    if not char then return false end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    
-    -- Wait 5 seconds before teleporting to reward
-    task.wait(5)
-    
-    -- Teleport to the present meshpart
-    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local targetCFrame = CFrame.new(mesh.Position + Vector3.new(0, 2, 0))
-    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
-    tween:Play()
-    
-    return true
-end
-
 local function createPartyAndJoin()
     -- First create the party
     local createSuccess = pcall(function()
@@ -756,14 +709,16 @@ local function handleDungeonTeleport()
         State.specialMode = false
         State.isRunning = true
         State.shootingEnabled = true
+        State.waitingForTeleport = false
+        State.teleportTimerStarted = false
     end
 end
 
 local function farmingLoop()
     local lastBossCheck = 0
     local bossCheckInterval = 2
-    local lastRewardCheck = 0
-    local rewardCheckInterval = 1
+    local lastTeleportCheck = 0
+    local teleportCheckInterval = 1
     
     while State.isRunning and not State.bossCompleted do
         local now = tick()
@@ -807,34 +762,37 @@ local function farmingLoop()
             if now - lastBossCheck > bossCheckInterval then
                 local bossDead = checkBossDead()
                 
-                if bossDead and State.bossHasSpawned and not State.bossCompleted then
-                    -- Boss is dead, continue shooting other enemies
+                if bossDead and State.bossHasSpawned and not State.bossCompleted and not State.teleportTimerStarted then
+                    -- Boss is dead, start 20-second timer for teleport
                     State.bossHasSpawned = false
-                    
-                    -- Check if there are still enemies left
-                    if not anyEnemiesLeft() then
-                        -- No enemies left, start checking for reward
-                        State.waitingForReward = true
-                    end
+                    State.waitingForTeleport = true
+                    State.teleportTimerStarted = true
+                    State.bossDefeatedTime = now
+                    print("Boss defeated. Starting 20-second timer for dungeon teleport...")
                 end
                 
                 lastBossCheck = now
             end
             
-            if State.waitingForReward then
-                -- Check for reward present
-                if now - lastRewardCheck > rewardCheckInterval then
-                    local rewardStatus = checkRewardPresent()
+            if State.waitingForTeleport then
+                -- Check if 20 seconds have passed since boss died
+                if now - lastTeleportCheck > teleportCheckInterval then
+                    local timeSinceBossDefeated = now - State.bossDefeatedTime
                     
-                    if rewardStatus == "exists" and not State.rewardTaken then
-                        collectReward()
-                    elseif rewardStatus == "taken" then
-                        State.waitingForReward = false
+                    if timeSinceBossDefeated >= 20 then
+                        -- 20 seconds have passed, trigger dungeon teleport
+                        State.waitingForTeleport = false
                         handleDungeonTeleport()
                         break
+                    else
+                        -- Still waiting, show countdown
+                        local timeLeft = 20 - math.floor(timeSinceBossDefeated)
+                        if timeLeft % 5 == 0 or timeLeft <= 5 then
+                            print("Teleporting to dungeon in " .. timeLeft .. " seconds...")
+                        end
                     end
                     
-                    lastRewardCheck = now
+                    lastTeleportCheck = now
                 end
             else
                 -- Normal farming - continue shooting all enemies (including after boss death)
@@ -952,13 +910,12 @@ return {
             PlayerAlive = State.playerAlive,
             ShootingEnabled = State.shootingEnabled,
             ShootingErrors = State.shootingErrors,
-            RewardSpawned = State.rewardPresentSpawned,
-            RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
             Teleported = State.teleported,
             DungeonAttempts = State.dungeonTeleportAttempts,
-            WaitingForReward = State.waitingForReward,
-            EnemiesLeft = anyEnemiesLeft()
+            WaitingForTeleport = State.waitingForTeleport,
+            TimeSinceBossDefeated = State.bossDefeatedTime > 0 and (tick() - State.bossDefeatedTime) or 0,
+            TimeLeftUntilTeleport = State.bossDefeatedTime > 0 and math.max(0, 20 - (tick() - State.bossDefeatedTime)) or 0
         }
     end,
     
