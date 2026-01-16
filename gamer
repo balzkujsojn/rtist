@@ -418,7 +418,7 @@ local function equipTool()
 end
 
 local function attemptFire()
-    if not State.isRunning or State.specialMode then 
+    if not State.isRunning or State.specialMode or State.bossCompleted then 
         return 
     end
     if not State.playerAlive or not State.shootingEnabled then 
@@ -722,37 +722,14 @@ local function attemptArcticTeleport()
     return success
 end
 
-local function handleAutoTeleport()
-    -- This handles auto-teleport from AUTOTELEPORT_PLACE_ID
-    State.bossCompleted = true
-    State.specialMode = true
-    State.isRunning = false
-    State.shootingEnabled = false
-    
-    task.wait(2)
-    
-    -- Equip Arctic Core first
-    local equipped = equipArcticCore()
-    if not equipped then
-        State.bossCompleted = false
-        State.specialMode = false
-        State.isRunning = true
-        State.shootingEnabled = true
-        State.autoTeleportTriggered = false
-        return
-    end
-    
-    task.wait(1)
-    
-    -- Create party and join directly
-    local success = createPartyAndJoin()
+local function handleDungeonTeleport()
+    local success = attemptArcticTeleport()
     
     if not success then
         State.bossCompleted = false
         State.specialMode = false
         State.isRunning = true
         State.shootingEnabled = true
-        State.autoTeleportTriggered = false
     end
 end
 
@@ -769,22 +746,48 @@ local function farmingLoop()
         
         if State.playerAlive then
             if checkAutoTeleport() then
-                handleAutoTeleport()
+                State.bossCompleted = true
+                State.specialMode = true
+                State.isRunning = false
+                State.shootingEnabled = false
+                task.wait(2)
+                
+                -- Equip Arctic Core first
+                local equipped = equipArcticCore()
+                if not equipped then
+                    State.bossCompleted = false
+                    State.specialMode = false
+                    State.isRunning = true
+                    State.shootingEnabled = true
+                    State.autoTeleportTriggered = false
+                    continue
+                end
+                
+                task.wait(1)
+                
+                -- Create party and join directly
+                local success = createPartyAndJoin()
+                
+                if not success then
+                    State.bossCompleted = false
+                    State.specialMode = false
+                    State.isRunning = true
+                    State.shootingEnabled = true
+                    State.autoTeleportTriggered = false
+                end
                 break
             end
             
             if now - lastBossCheck > bossCheckInterval then
                 local bossDead = checkBossDead()
                 
-                if bossDead and not State.bossCompleted then
+                if bossDead and State.bossHasSpawned and not State.bossCompleted then
                     -- Boss is dead, continue shooting other enemies
                     State.bossHasSpawned = false
                     
                     -- Check if there are still enemies left
                     if not anyEnemiesLeft() then
                         -- No enemies left, start checking for reward
-                        State.bossCompleted = true
-                        State.bossDefeatedTime = now
                         State.waitingForReward = true
                     end
                 end
@@ -801,7 +804,7 @@ local function farmingLoop()
                         collectReward()
                     elseif rewardStatus == "taken" then
                         State.waitingForReward = false
-                        attemptArcticTeleport()
+                        handleDungeonTeleport()
                         break
                     end
                     
@@ -935,7 +938,7 @@ return {
     
     TriggerDungeon = function()
         if not State.bossCompleted then
-            attemptArcticTeleport()
+            handleDungeonTeleport()
         end
     end,
     
