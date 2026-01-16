@@ -15,7 +15,7 @@ local CONFIG = {
     REMOTE_NAME = "RemoteFunction"
 }
 
--- Enemies to ignore in the new dungeon
+-- Ignored enemies list
 local IGNORE_ENEMIES = {
     ["Champion of the Equinox"] = true,
     ["Fiscus"] = true,
@@ -24,36 +24,23 @@ local IGNORE_ENEMIES = {
     ["Present Mimic"] = true
 }
 
+-- Priority enemies (only Comet boss now)
+local PRIORITY_ENEMIES = {
+    ["Comet, the Mechanical Vengeance"] = true
+}
+
+-- Place IDs
+local SPECIFIC_PLACE_ID = 112802237735950
+local AUTOTELEPORT_PLACE_ID = 8811271345
+
+-- Platform position
+local PLATFORM_POSITION = Vector3.new(-251, 130, 3783)
+local PLATFORM_SIZE = Vector3.new(20, 5, 20)  -- 20x20 platform with 5 studs height
+
 -- Boss target part
 local BOSS_TARGET_PART = "Torso"
 
--- Spawnable items and their corresponding enemy models
-local SPAWNABLE_ITEMS = {
-    {
-        ToolName = "Ominous Dark Egg",
-        EnemyName = "Fiscus",
-        Used = false,
-        Attempts = 0
-    },
-    {
-        ToolName = "Aromatic Seagrass", 
-        EnemyName = "Shellshock",
-        Used = false,
-        Attempts = 0
-    },
-    {
-        ToolName = "Equinox Seal",
-        EnemyName = "Champion of the Equinox",
-        Used = false,
-        Attempts = 0
-    }
-}
-
-local PLATFORM_POSITION = Vector3.new(-251, 130, 3783)
-local PLATFORM_TELEPORT_HEIGHT = 5 -- Teleport slightly above platform
-local NEW_PLACE_ID = 112802237735950
-local AUTOTELEPORT_PLACE_ID = 8811271345
-
+-- State management
 local State = {
     isRunning = true,
     specialMode = false,
@@ -65,36 +52,26 @@ local State = {
     playerAlive = true,
     skipSaid = false,
     skipAllSaid = false,
-    shieldUsed = false,
-    lastShieldUse = 0,
-    shieldCooldown = 5,
     teleported = false,
-    livesChecked = false,
-    lastLivesCheck = 0,
+    itemsUsed = false,
+    rewardCollected = false,
+    rewardPresentSpawned = false,
+    rewardTaken = false,
     autoTeleportTriggered = false,
-    teleportAttempts = 0,
-    maxTeleportAttempts = 3,
-    teleportInProgress = false,
     shootingEnabled = true,
     shootingErrors = 0,
-    maxShootingErrors = 10,
-    lastToolEquipTime = 0,
-    toolEquipCooldown = 2,
-    itemsUsed = false,
-    bossPresent = false,
-    rewardPresentSpawned = false,
-    rewardPresentTaken = false,
-    platformCreated = false,
-    dungeonTeleportReady = false,
-    tryingToSpawnItems = false
+    maxShootingErrors = 5,
+    platformCreated = false
 }
 
 local cache = {
     workspaceChildren = {},
     lastWorkspaceUpdate = 0,
-    workspaceUpdateInterval = 0.5
+    workspaceUpdateInterval = 0.5,
+    lastPriorityCheck = 0
 }
 
+-- Helper functions
 local function chatMessage(str)
     if type(str) ~= "string" then str = tostring(str) end
     
@@ -121,121 +98,8 @@ local function chatMessage(str)
     end
 end
 
-local function useSpawnItem(itemData)
-    if itemData.Used then return true end
-    
-    local character = player.Character
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return false end
-    
-    -- Check if enemy already exists
-    local enemy = workspace:FindFirstChild(itemData.EnemyName)
-    if enemy then
-        itemData.Used = true
-        return true
-    end
-    
-    -- Try to find and use the item
-    local tool = character:FindFirstChild(itemData.ToolName)
-    if not tool then
-        local backpack = player:FindFirstChild("Backpack")
-        if backpack then
-            tool = backpack:FindFirstChild(itemData.ToolName)
-            if tool then
-                tool.Parent = character
-                task.wait(0.1)
-            end
-        end
-    end
-    
-    if not tool then
-        return false
-    end
-    
-    -- Equip and click the tool
-    humanoid:EquipTool(tool)
-    task.wait(0.5)
-    
-    -- Try to find click remote
-    local clickRemote = tool:FindFirstChild("Click")
-    if clickRemote and clickRemote:IsA("RemoteEvent") then
-        pcall(function()
-            clickRemote:FireServer()
-        end)
-    else
-        -- Try alternative remote names
-        local activateRemote = tool:FindFirstChild("Activate")
-        if activateRemote and activateRemote:IsA("RemoteEvent") then
-            pcall(function()
-                activateRemote:FireServer()
-            end)
-        else
-            -- Try to find any remote
-            for _, child in pairs(tool:GetChildren()) do
-                if child:IsA("RemoteEvent") then
-                    pcall(function()
-                        child:FireServer()
-                    end)
-                    break
-                end
-            end
-        end
-    end
-    
-    itemData.Used = true
-    itemData.Attempts = itemData.Attempts + 1
-    
-    -- Wait a bit for enemy to spawn
-    task.wait(2)
-    
-    -- Check if enemy spawned
-    enemy = workspace:FindFirstChild(itemData.EnemyName)
-    if enemy then
-        return true
-    end
-    
-    return false
-end
-
-local function useSpawnItems()
-    if State.itemsUsed or State.tryingToSpawnItems then return end
-    
-    State.tryingToSpawnItems = true
-    
-    -- First pass: try to spawn all items
-    for _, itemData in ipairs(SPAWNABLE_ITEMS) do
-        if not itemData.Used then
-            useSpawnItem(itemData)
-            task.wait(1)
-        end
-    end
-    
-    -- Second pass: retry any that failed
-    for _, itemData in ipairs(SPAWNABLE_ITEMS) do
-        if not itemData.Used and itemData.Attempts < 2 then
-            useSpawnItem(itemData)
-            task.wait(1)
-        end
-    end
-    
-    -- Check if all enemies spawned
-    local allSpawned = true
-    for _, itemData in ipairs(SPAWNABLE_ITEMS) do
-        local enemy = workspace:FindFirstChild(itemData.EnemyName)
-        if not enemy then
-            allSpawned = false
-            break
-        end
-    end
-    
-    State.itemsUsed = allSpawned
-    State.tryingToSpawnItems = false
-end
-
 local function sendSkipCommands()
-    if game.PlaceId ~= NEW_PLACE_ID then return end
+    if game.PlaceId ~= SPECIFIC_PLACE_ID then return end
     if State.skipAllSaid then return end
     
     task.spawn(function()
@@ -245,48 +109,104 @@ local function sendSkipCommands()
     end)
 end
 
-local function createPlatformAndTeleport()
+local function useItem(itemName)
+    local backpack = player:FindFirstChild("Backpack")
+    if not backpack then return false end
+    
+    local item = backpack:FindFirstChild(itemName)
+    if not item then return false end
+    
+    local remote = item:FindFirstChild("RemoteEvent") or item:FindFirstChild("RemoteFunction")
+    if remote then
+        local success = pcall(function()
+            if remote:IsA("RemoteEvent") then
+                remote:FireServer()
+            else
+                remote:InvokeServer()
+            end
+        end)
+        return success
+    end
+    return false
+end
+
+local function useSpawnItems()
+    if State.itemsUsed then return end
+    
+    -- Check if enemies already spawned
+    local fiscus = workspace:FindFirstChild("Fiscus")
+    local shellshock = workspace:FindFirstChild("Shellshock")
+    local champion = workspace:FindFirstChild("Champion of the Equinox")
+    
+    -- Only use items if enemies haven't spawned
+    if not fiscus then
+        useItem("Ominous Dark Egg")
+        task.wait(0.5)
+    end
+    
+    if not shellshock then
+        useItem("Aromatic Seagrass")
+        task.wait(0.5)
+    end
+    
+    if not champion then
+        useItem("Equinox Seal")
+        task.wait(0.5)
+    end
+    
+    State.itemsUsed = true
+end
+
+local function createPlatform()
     if State.platformCreated then return end
     
-    State.platformCreated = true
-    
-    task.wait(1) -- Wait a bit after skipall
-    
-    -- Create platform
     local platform = Instance.new("Part")
     platform.Name = "AutoFarmPlatform"
-    platform.Size = Vector3.new(20, 1, 20)
-    platform.Position = PLATFORM_POSITION + Vector3.new(0, 0.5, 0) -- Add 0.5 to Y so player stands on top
+    platform.Size = PLATFORM_SIZE
+    platform.Position = PLATFORM_POSITION + Vector3.new(0, PLATFORM_SIZE.Y/2, 0)
     platform.Anchored = true
     platform.CanCollide = true
-    platform.Color = Color3.fromRGB(100, 100, 100)
-    platform.Material = Enum.Material.Plastic
+    platform.Transparency = 0.7
+    platform.Color = Color3.fromRGB(0, 170, 255)
+    platform.Material = Enum.Material.Neon
+    
+    local surfaceGui = Instance.new("SurfaceGui", platform)
+    surfaceGui.Face = Enum.NormalId.Top
+    surfaceGui.AlwaysOnTop = true
+    
+    local textLabel = Instance.new("TextLabel", surfaceGui)
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = "AutoFarm Platform"
+    textLabel.TextColor3 = Color3.new(1, 1, 1)
+    textLabel.TextScaled = true
+    
     platform.Parent = workspace
     
-    -- Teleport to platform
-    task.wait(1)
+    State.platformCreated = true
+end
+
+local function teleportToPlatform()
+    if State.teleported then return end
     
     local char = player.Character
-    if not char then 
-        task.wait(2)
-        char = player.Character
-        if not char then return end
-    end
+    if not char then return end
     
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then 
-        task.wait(1)
-        hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
+    if not hrp then return end
+    
+    -- Create platform first
+    if not State.platformCreated then
+        createPlatform()
     end
     
-    local teleportPos = PLATFORM_POSITION + Vector3.new(0, PLATFORM_TELEPORT_HEIGHT, 0) -- Teleport above platform
+    -- Teleport to platform
+    State.teleported = true
     
     local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = CFrame.new(teleportPos)})
+    local targetCFrame = CFrame.new(PLATFORM_POSITION + Vector3.new(0, 5, 0))
+    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
     tween:Play()
-    
-    State.teleported = true
 end
 
 local function isPlayerAlive()
@@ -296,74 +216,6 @@ local function isPlayerAlive()
     if not humanoid then return false end
     
     return humanoid.Health > 0
-end
-
-local function checkLives()
-    local now = tick()
-    if now - State.lastLivesCheck < 2 then
-        return false
-    end
-    
-    State.lastLivesCheck = now
-    
-    local livesValue = player:FindFirstChild("Lives")
-    if livesValue and livesValue:IsA("NumberValue") then
-        local livesNumber = livesValue.Value
-        
-        if livesNumber == 1 and not State.livesChecked then
-            State.livesChecked = true
-            return true
-        end
-        
-        if livesNumber > 1 then
-            State.livesChecked = false
-        end
-    end
-    
-    return false
-end
-
-local function useShield()
-    local now = tick()
-    
-    if now - State.lastShieldUse < State.shieldCooldown then
-        return
-    end
-    
-    local char = player.Character
-    if not char then return end
-    
-    local shield = char:FindFirstChild("Shield")
-    if not shield then return end
-    
-    local remote = shield:FindFirstChild("ShieldRemote")
-    if not remote then return end
-    
-    task.spawn(function()
-        pcall(remote.FireServer, remote)
-        State.shieldUsed = true
-        State.lastShieldUse = now
-    end)
-end
-
-local function setupHealthMonitoring()
-    local char = player.Character
-    if not char then return end
-    
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
-    
-    humanoid.HealthChanged:Connect(function(health)
-        if humanoid.MaxHealth > 0 then
-            local healthPercent = (health / humanoid.MaxHealth) * 100
-            
-            if healthPercent < 50 and not State.shieldUsed and health > 0 then
-                useShield()
-            elseif healthPercent >= 50 then
-                State.shieldUsed = false
-            end
-        end
-    end)
 end
 
 local function checkAutoTeleport()
@@ -382,7 +234,7 @@ end
 local function getTargetPart(model)
     local enemyName = model.Name
     
-    -- Boss has specific target part
+    -- Special handling for Comet boss
     if enemyName == "Comet, the Mechanical Vengeance" then
         local torso = model:FindFirstChild(BOSS_TARGET_PART)
         if torso then
@@ -390,7 +242,7 @@ local function getTargetPart(model)
         end
     end
     
-    -- Standard target parts for other enemies
+    -- Default part search
     local possibleParts = {
         "HumanoidRootPart",
         "Head",
@@ -430,21 +282,18 @@ local function findEnemies()
     end
     
     local enemies = {}
-    local bossFound = false
+    local priorityEnemies = {}
     
     for _, model in ipairs(cache.workspaceChildren) do
         if model:IsA("Model") and model.Parent == workspace then
-            local enemyName = model.Name
-            
             -- Skip ignored enemies
-            if IGNORE_ENEMIES[enemyName] then
+            if IGNORE_ENEMIES[model.Name] then
                 continue
             end
             
             local humanoid = model:FindFirstChildOfClass("Humanoid")
             
             if humanoid and humanoid.Health > 0 then
-                -- Skip player characters
                 local isPlayerCharacter = false
                 for _, plr in ipairs(Players:GetPlayers()) do
                     if plr.Character == model then
@@ -461,26 +310,28 @@ local function findEnemies()
                             Humanoid = humanoid,
                             TargetPart = targetPart,
                             Position = targetPart.Position,
-                            Name = enemyName,
-                            IsBoss = enemyName == "Comet, the Mechanical Vengeance",
+                            Name = model.Name,
+                            IsPriority = PRIORITY_ENEMIES[model.Name] == true,
                             LastSeen = now
                         }
                         
-                        if enemyData.IsBoss then
-                            bossFound = true
-                            State.bossPresent = true
+                        if model.Name == "Comet, the Mechanical Vengeance" then
                             State.bossHasSpawned = true
                         end
                         
-                        table.insert(enemies, enemyData)
+                        if enemyData.IsPriority then
+                            table.insert(priorityEnemies, enemyData)
+                        else
+                            table.insert(enemies, enemyData)
+                        end
                     end
                 end
             end
         end
     end
     
-    if not bossFound then
-        State.bossPresent = false
+    if #priorityEnemies > 0 then
+        return priorityEnemies
     end
     
     return enemies
@@ -497,14 +348,16 @@ local function selectTarget()
         return nil
     end
     
-    -- Prioritize boss
-    for _, enemy in ipairs(enemies) do
-        if enemy.IsBoss then
-            return enemy
+    if State.currentTarget then
+        local targetModel = State.currentTarget.Model
+        if targetModel and targetModel.Parent then
+            local humanoid = targetModel:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                return State.currentTarget
+            end
         end
     end
     
-    -- Return closest enemy
     local character = player.Character
     if not character then 
         return enemies[1] 
@@ -556,40 +409,26 @@ local function getValidTool()
 end
 
 local function equipTool()
-    local now = tick()
-    
     if not State.playerAlive then 
         task.wait(0.5)
-        return equipTool()
-    end
-    
-    if now - State.lastToolEquipTime < State.toolEquipCooldown then
         return false
     end
     
     local character = player.Character
     if not character then 
         task.wait(0.5)
-        return equipTool()
+        return false
     end
     
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     if not humanoid then 
         task.wait(0.5)
-        return equipTool()
-    end
-    
-    -- Check if tool is already equipped
-    local currentTool = humanoid:GetEquippedTool()
-    if currentTool and currentTool.Name == CONFIG.TOOL_NAME then
-        State.lastToolEquipTime = now
-        return true
+        return false
     end
     
     local tool = character:FindFirstChild(CONFIG.TOOL_NAME)
     if tool then
         humanoid:EquipTool(tool)
-        State.lastToolEquipTime = now
         return true
     end
     
@@ -600,7 +439,6 @@ local function equipTool()
             tool.Parent = character
             task.wait(0.1)
             humanoid:EquipTool(tool)
-            State.lastToolEquipTime = now
             return true
         end
     end
@@ -616,61 +454,22 @@ local function attemptFire()
         return 
     end
     
-    local success, targetResult = pcall(function()
-        State.currentTarget = selectTarget()
-        return State.currentTarget
-    end)
+    State.currentTarget = selectTarget()
+    if not State.currentTarget then
+        return
+    end
     
-    if not success then
-        State.shootingErrors = State.shootingErrors + 1
-        if State.shootingErrors > State.maxShootingErrors then
-            State.shootingEnabled = false
-            task.wait(5)
-            State.shootingEnabled = true
-            State.shootingErrors = 0
+    local toolData = getValidTool()
+    if not toolData then 
+        local equipped = equipTool()
+        if not equipped then 
+            return 
         end
-        return
-    end
-    
-    if not targetResult then
-        return
-    end
-    
-    local toolData
-    local toolSuccess, toolResult = pcall(function()
+        
         toolData = getValidTool()
-        return toolData
-    end)
-    
-    if not toolSuccess then
-        State.shootingErrors = State.shootingErrors + 1
-        return
-    end
-    
-    if not toolResult then 
-        local equipSuccess, equipResult = pcall(function()
-            return equipTool()
-        end)
-        
-        if not equipSuccess then
-            State.shootingErrors = State.shootingErrors + 1
-            return
-        end
-        
-        if not equipResult then 
+        if not toolData then 
             return 
         end
-        
-        local toolRetrySuccess, toolRetryResult = pcall(function()
-            toolData = getValidTool()
-            return toolData
-        end)
-        
-        if not toolRetrySuccess or not toolRetryResult then 
-            return 
-        end
-        
-        toolData = toolRetryResult
     end
     
     local now = tick()
@@ -680,7 +479,7 @@ local function attemptFire()
     
     State.lastFireTime = now
     
-    local targetPart = targetResult.TargetPart
+    local targetPart = State.currentTarget.TargetPart
     if not targetPart then
         return
     end
@@ -707,7 +506,7 @@ local function attemptFire()
         
         if State.shootingErrors > State.maxShootingErrors then
             State.shootingEnabled = false
-            task.wait(3)
+            task.wait(2)
             State.shootingEnabled = true
             State.shootingErrors = 0
         end
@@ -716,211 +515,13 @@ local function attemptFire()
     end
 end
 
-local function checkTeleportState()
-    local teleportState = TeleportService:GetLocalPlayerTeleportState()
-    return teleportState == Enum.TeleportState.RequestedFromServer or 
-           teleportState == Enum.TeleportState.InProgress or 
-           teleportState == Enum.TeleportState.Started
-end
-
-local function checkTeleportSuccess()
-    task.wait(15)
-    
-    local teleportState = TeleportService:GetLocalPlayerTeleportState()
-    
-    if teleportState == Enum.TeleportState.Failed or 
-       teleportState == Enum.TeleportState.None then
-        return false
-    end
-    
-    return true
-end
-
-local function checkRewardPresent()
-    local reward = workspace:FindFirstChild("RewardPresent")
-    if reward then
-        State.rewardPresentSpawned = true
-        
-        local presentPart = reward:FindFirstChild("Present")
-        if presentPart then
-            -- Teleport to collect the present
-            local char = player.Character
-            if char then
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                if hrp then
-                    local tweenInfo = TweenInfo.new(1, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-                    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = presentPart.CFrame})
-                    tween:Play()
-                    
-                    -- Mark as taken after teleport
-                    task.wait(2)
-                    State.rewardPresentTaken = true
-                    State.dungeonTeleportReady = true
-                end
-            end
-        end
-    elseif State.rewardPresentSpawned and not reward then
-        -- Present has been collected
-        State.rewardPresentTaken = true
-        State.dungeonTeleportReady = true
-    end
-end
-
-local function useArcticCore()
-    local character = player.Character
-    if not character then return false end
-    
-    local arcticCore = character:FindFirstChild("Arctic Core")
-    if not arcticCore then
-        local backpack = player:FindFirstChild("Backpack")
-        if backpack then
-            arcticCore = backpack:FindFirstChild("Arctic Core")
-            if arcticCore then
-                arcticCore.Parent = character
-                task.wait(0.1)
-            end
-        end
-    end
-    
-    if not arcticCore then
-        return false
-    end
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        humanoid:EquipTool(arcticCore)
-        task.wait(0.5)
-        
-        -- Try to find and click the remote
-        local clickRemote = arcticCore:FindFirstChild("Click")
-        if clickRemote and clickRemote:IsA("RemoteEvent") then
-            pcall(function()
-                clickRemote:FireServer()
-            end)
-        else
-            -- Try alternative remote names
-            local activateRemote = arcticCore:FindFirstChild("Activate")
-            if activateRemote and activateRemote:IsA("RemoteEvent") then
-                pcall(function()
-                    activateRemote:FireServer()
-                end)
-            else
-                -- Try any remote event
-                for _, child in pairs(arcticCore:GetChildren()) do
-                    if child:IsA("RemoteEvent") then
-                        pcall(function()
-                            child:FireServer()
-                        end)
-                        break
-                    end
-                end
-            end
-        end
-        return true
-    end
-    
-    return false
-end
-
-local function attemptDungeonTeleport()
-    if State.bossCompleted then 
-        return 
-    end
-    
-    State.bossCompleted = true
-    State.specialMode = true
-    State.isRunning = false
-    State.shootingEnabled = false
-    
-    task.wait(3)
-    
-    -- Unequip current tool
-    local tool = getValidTool()
-    if tool and tool.Tool then
-        tool.Tool.Parent = player.Backpack
-    end
-    
-    task.wait(2)
-    
-    -- Use Arctic Core
-    local coreUsed = useArcticCore()
-    if not coreUsed then
-        return false
-    end
-    
-    task.wait(3)
-    
-    for attempt = 1, State.maxTeleportAttempts do
-        State.teleportAttempts = attempt
-        
-        local createSuccess = pcall(function()
-            local args = {
-                [1] = "createParty",
-                [2] = {
-                    ["settings"] = {
-                        ["Visual"] = true,
-                        ["FriendsOnly"] = true,
-                        ["TormentMode"] = true
-                    },
-                    ["subplace"] = "ArcticZone"
-                }
-            }
-            
-            local partyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PartySystem"):WaitForChild("PartyFunction")
-            return partyRemote:InvokeServer(unpack(args))
-        end)
-        
-        if not createSuccess then
-            task.wait(2)
-            continue
-        end
-        
-        task.wait(3)
-        
-        local joinSuccess = pcall(function()
-            local args = {
-                [1] = "joinSubplace",
-                [2] = {}
-            }
-            
-            local partyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PartySystem"):WaitForChild("PartyFunction")
-            return partyRemote:InvokeServer(unpack(args))
-        end)
-        
-        if joinSuccess then
-            local teleportSuccessful = checkTeleportSuccess()
-            if teleportSuccessful then
-                return true
-            end
-        end
-        
-        if attempt < State.maxTeleportAttempts then
-            task.wait(10)
-        end
-    end
-    
-    return false
-end
-
-local function handleDungeonTeleport()
-    local success = attemptDungeonTeleport()
-    
-    if not success then
-        State.bossCompleted = false
-        State.specialMode = false
-        State.isRunning = true
-        State.livesChecked = false
-        State.shootingEnabled = true
-    end
-end
-
 local function checkBossStatus()
-    local boss = workspace:FindFirstChild("Comet, the Mechanical Vengeance")
+    local comet = workspace:FindFirstChild("Comet, the Mechanical Vengeance")
     
-    if boss then
+    if comet then
         State.bossHasSpawned = true
         
-        local humanoid = boss:FindFirstChildOfClass("Humanoid")
+        local humanoid = comet:FindFirstChildOfClass("Humanoid")
         if humanoid then
             if humanoid.Health <= 0 then
                 return "dead"
@@ -935,22 +536,131 @@ local function checkBossStatus()
     end
 end
 
-local function shootingRecoveryCheck()
-    local lastShotTime = State.lastFireTime
-    local currentTime = tick()
+local function checkRewardPresent()
+    local present = workspace:FindFirstChild("RewardPresent")
     
-    if State.shootingEnabled and State.isRunning and not State.bossCompleted and State.playerAlive then
-        if currentTime - lastShotTime > 10 then
-            State.shootingErrors = State.maxShootingErrors + 1
+    if present then
+        State.rewardPresentSpawned = true
+        
+        -- Check if present has been taken (model still exists but might be empty)
+        local mesh = present:FindFirstChild("Present")
+        if not mesh then
+            State.rewardTaken = true
+            return "taken"
         end
+        
+        return "exists"
+    else
+        if State.rewardPresentSpawned and not State.rewardTaken then
+            State.rewardTaken = true
+            return "taken"
+        end
+        return "not_found"
+    end
+end
+
+local function collectReward()
+    local present = workspace:FindFirstChild("RewardPresent")
+    if not present then return false end
+    
+    local mesh = present:FindFirstChild("Present")
+    if not mesh then return false end
+    
+    local char = player.Character
+    if not char then return false end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    
+    -- Teleport to the present
+    local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local targetCFrame = CFrame.new(present.Position + Vector3.new(0, 3, 0))
+    local tween = TweenService:Create(hrp, tweenInfo, {CFrame = targetCFrame})
+    tween:Play()
+    
+    return true
+end
+
+local function attemptArcticTeleport()
+    if State.bossCompleted then 
+        return 
+    end
+    
+    State.bossCompleted = true
+    State.specialMode = true
+    State.isRunning = false
+    State.shootingEnabled = false
+    
+    task.wait(5)  -- Wait after reward taken
+    
+    -- Unequip cannon
+    local tool = getValidTool()
+    if tool and tool.Tool then
+        tool.Tool.Parent = player.Backpack
+    end
+    
+    task.wait(1)
+    
+    -- Equip Arctic Core
+    local character = player.Character
+    if character then
+        local arcticCore = character:FindFirstChild("Arctic Core")
+        if not arcticCore then
+            local backpack = player:FindFirstChild("Backpack")
+            if backpack then
+                arcticCore = backpack:FindFirstChild("Arctic Core")
+                if arcticCore then
+                    arcticCore.Parent = character
+                end
+            end
+        end
+        
+        if arcticCore then
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            if humanoid then
+                humanoid:EquipTool(arcticCore)
+            end
+        end
+    end
+    
+    task.wait(2)
+    
+    -- Create party and teleport
+    local success = pcall(function()
+        local args = {
+            [1] = "createParty",
+            [2] = {
+                ["settings"] = {
+                    ["Visual"] = true,
+                    ["FriendsOnly"] = false,
+                    ["TormentMode"] = true
+                },
+                ["subplace"] = "ArcticZone"
+            }
+        }
+        
+        local partyRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("PartySystem"):WaitForChild("PartyFunction")
+        partyRemote:InvokeServer(unpack(args))
+        return true
+    end)
+    
+    return success
+end
+
+local function handleArcticTeleport()
+    local success = attemptArcticTeleport()
+    
+    if not success then
+        State.bossCompleted = false
+        State.specialMode = false
+        State.isRunning = true
+        State.shootingEnabled = true
     end
 end
 
 local function farmingLoop()
     local lastBossCheck = 0
     local bossCheckInterval = 2
-    local lastRecoveryCheck = 0
-    local recoveryCheckInterval = 5
     local lastRewardCheck = 0
     local rewardCheckInterval = 1
     
@@ -960,29 +670,8 @@ local function farmingLoop()
         State.playerAlive = isPlayerAlive()
         
         if State.playerAlive then
-            -- Always try to keep tool equipped
-            if not State.specialMode and not State.bossCompleted then
-                local hasTool = getValidTool()
-                if not hasTool then
-                    equipTool()
-                end
-            end
-            
-            if checkLives() then
-                handleDungeonTeleport()
-                break
-            end
-            
             if checkAutoTeleport() then
-                -- Use Arctic Core for auto teleport
-                local character = player.Character
-                if character then
-                    task.wait(2)
-                    local coreUsed = useArcticCore()
-                    if coreUsed then
-                        break
-                    end
-                end
+                handleArcticTeleport()
                 break
             end
             
@@ -990,35 +679,31 @@ local function farmingLoop()
                 local bossStatus = checkBossStatus()
                 
                 if State.bossHasSpawned and bossStatus == "dead" and not State.bossCompleted then
-                    -- Boss died, start checking for reward present
-                    State.rewardPresentSpawned = false
-                    State.rewardPresentTaken = false
-                    State.dungeonTeleportReady = false
+                    -- Boss died, start checking for reward
+                    State.bossCompleted = true
                 end
                 
                 lastBossCheck = now
             end
             
-            if now - lastRewardCheck > rewardCheckInterval then
-                if State.bossHasSpawned and not State.rewardPresentTaken then
-                    checkRewardPresent()
+            if State.bossCompleted then
+                -- Check for reward present
+                if now - lastRewardCheck > rewardCheckInterval then
+                    local rewardStatus = checkRewardPresent()
+                    
+                    if rewardStatus == "exists" and not State.rewardTaken then
+                        collectReward()
+                    elseif rewardStatus == "taken" then
+                        handleArcticTeleport()
+                        break
+                    end
+                    
+                    lastRewardCheck = now
                 end
-                
-                if State.dungeonTeleportReady and not State.bossCompleted then
-                    task.wait(5) -- Wait 5 seconds after present is taken
-                    handleDungeonTeleport()
-                    break
-                end
-                
-                lastRewardCheck = now
+            else
+                -- Normal farming
+                attemptFire()
             end
-            
-            if now - lastRecoveryCheck > recoveryCheckInterval then
-                shootingRecoveryCheck()
-                lastRecoveryCheck = now
-            end
-            
-            attemptFire()
         else
             State.currentTarget = nil
         end
@@ -1030,16 +715,20 @@ end
 local function onCharacterAdded(character)
     task.wait(2)
     
-    if game.PlaceId == NEW_PLACE_ID and (not State.skipAllSaid) then
-        task.spawn(function()
+    if game.PlaceId == SPECIFIC_PLACE_ID then
+        -- Use spawn items
+        useSpawnItems()
+        
+        -- Send skip command
+        if not State.skipAllSaid then
             sendSkipCommands()
-            
-            -- After skip commands, spawn items and create platform
-            task.wait(1)
-            useSpawnItems()
-            task.wait(1)
-            createPlatformAndTeleport()
-        end)
+        end
+        
+        -- Teleport to platform after skip command
+        task.wait(1)
+        if not State.teleported then
+            teleportToPlatform()
+        end
     end
     
     if State.isRunning and not State.specialMode and not State.bossCompleted then
@@ -1047,12 +736,6 @@ local function onCharacterAdded(character)
             equipTool()
         end
     end
-    
-    setupHealthMonitoring()
-    
-    State.shootingEnabled = true
-    State.shootingErrors = 0
-    State.bossPresent = false
 end
 
 local function initialize()
@@ -1123,55 +806,27 @@ return {
     
     EquipTool = equipTool,
     
-    ForceSkipCommands = function()
-        sendSkipCommands()
-    end,
-    
-    UseSpawnItems = function()
-        useSpawnItems()
-    end,
-    
-    CreatePlatform = function()
-        createPlatformAndTeleport()
-    end,
-    
     GetStatus = function()
-        local livesValue = player:FindFirstChild("Lives")
-        local currentLives = "Not found"
-        if livesValue and livesValue:IsA("NumberValue") then
-            currentLives = tostring(livesValue.Value)
-        end
-        
         return {
             BossSpawned = State.bossHasSpawned,
-            BossPresent = State.bossPresent,
             BossCompleted = State.bossCompleted,
             CurrentTarget = State.currentTarget and State.currentTarget.Name or "None",
-            LivesValue = currentLives,
-            LivesTriggered = State.livesChecked,
             AutoTeleportTriggered = State.autoTeleportTriggered,
             CurrentPlaceId = game.PlaceId,
             PlayerAlive = State.playerAlive,
-            TeleportAttempts = State.teleportAttempts,
-            TeleportState = TeleportService:GetLocalPlayerTeleportState(),
-            ShieldUsed = State.shieldUsed,
             ShootingEnabled = State.shootingEnabled,
             ShootingErrors = State.shootingErrors,
-            LastShotTime = State.lastFireTime,
-            TimeSinceLastShot = tick() - State.lastFireTime,
             ItemsUsed = State.itemsUsed,
-            RewardPresentSpawned = State.rewardPresentSpawned,
-            RewardPresentTaken = State.rewardPresentTaken,
-            DungeonTeleportReady = State.dungeonTeleportReady,
+            RewardSpawned = State.rewardPresentSpawned,
+            RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
-            SkipAllSaid = State.skipAllSaid,
             Teleported = State.teleported
         }
     end,
     
     TriggerDungeon = function()
         if not State.bossCompleted then
-            handleDungeonTeleport()
+            handleArcticTeleport()
         end
     end,
     
