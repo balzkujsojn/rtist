@@ -670,7 +670,7 @@ local function createPartyAndJoin()
             [2] = {
                 ["settings"] = {
                     ["Visual"] = true,
-                    ["FriendsOnly"] = true,
+                    ["FriendsOnly"] = false,
                     ["TormentMode"] = true
                 },
                 ["subplace"] = "ArcticZone"
