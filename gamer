@@ -24,9 +24,10 @@ local IGNORE_ENEMIES = {
     ["Present Mimic"] = true
 }
 
--- Priority enemies (only Comet boss now)
+-- Priority enemies (Penguin Copter first, then Comet boss)
 local PRIORITY_ENEMIES = {
-    ["Comet, the Mechanical Vengeance"] = true
+    ["Penguin Copter"] = true,  -- Highest priority
+    ["Comet, the Mechanical Vengeance"] = true  -- Second priority
 }
 
 -- Place IDs
@@ -275,7 +276,9 @@ local function findEnemies()
                             Position = targetPart.Position,
                             Name = model.Name,
                             IsPriority = PRIORITY_ENEMIES[model.Name] == true,
-                            LastSeen = now
+                            LastSeen = now,
+                            IsPenguinCopter = model.Name == "Penguin Copter",
+                            IsComet = model.Name == "Comet, the Mechanical Vengeance"
                         }
                         
                         if model.Name == "Comet, the Mechanical Vengeance" then
@@ -293,7 +296,19 @@ local function findEnemies()
         end
     end
     
+    -- Sort priority enemies: Penguin Copter first, then Comet
     if #priorityEnemies > 0 then
+        table.sort(priorityEnemies, function(a, b)
+            if a.IsPenguinCopter and not b.IsPenguinCopter then
+                return true
+            elseif not a.IsPenguinCopter and b.IsPenguinCopter then
+                return false
+            elseif a.IsComet and not b.IsComet then
+                return true
+            else
+                return false
+            end
+        end)
         return priorityEnemies
     end
     
@@ -496,13 +511,13 @@ local function attemptFire()
     
     local targetPos = targetPart.Position
     
-    -- Add random offset for boss to ensure hits register
-    if targetResult.Name == "Comet, the Mechanical Vengeance" then
-        -- Add small random offset (1-3 studs) in random direction
+    -- Add random offset for Penguin Copter and Comet boss to ensure hits register
+    if targetResult.Name == "Penguin Copter" or targetResult.Name == "Comet, the Mechanical Vengeance" then
+        -- Add random offset (3-4 studs) in all directions
         local randomOffset = Vector3.new(
-            math.random(-3, 3),
-            math.random(-2, 2),
-            math.random(-3, 3)
+            math.random(3, 4) * (math.random() > 0.5 and 1 or -1),
+            math.random(3, 4) * (math.random() > 0.5 and 1 or -1),
+            math.random(3, 4) * (math.random() > 0.5 and 1 or -1)
         )
         targetPos = targetPos + randomOffset
     end
