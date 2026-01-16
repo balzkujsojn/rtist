@@ -29,11 +29,23 @@ local PRIORITY_ENEMIES = {
     ["Comet, the Mechanical Vengeance"] = true
 }
 
--- Item to NPC mapping
+-- Item to NPC mapping with spawn data
 local ITEM_TO_NPC = {
-    ["Equinox Seal"] = "Champion of the Equinox",
-    ["Aromatic Seagrass"] = "Shellshock", 
-    ["Ominous Dark Egg"] = "Fiscus"
+    ["Equinox Seal"] = {
+        name = "Champion of the Equinox",
+        remoteArg = "Twilight",
+        spawnPosition = Vector3.new(-90.90042114257812, 10.091531753540039, 64.10246276855469)
+    },
+    ["Aromatic Seagrass"] = {
+        name = "Shellshock",
+        remoteArg = "Shellshock",
+        spawnPosition = Vector3.new(-81.57182312011719, 9.976997375488281, 48.956748962402344)
+    },
+    ["Ominous Dark Egg"] = {
+        name = "Fiscus",
+        remoteArg = "Fiscus",
+        spawnPosition = Vector3.new(-90, 10, 60)  -- Default position for Fiscus
+    }
 }
 
 -- Place IDs
@@ -76,7 +88,10 @@ local State = {
     maxShootingErrors = 5,
     platformCreated = false,
     dungeonTeleportAttempts = 0,
-    maxDungeonAttempts = 3
+    maxDungeonAttempts = 3,
+    bossDefeatedTime = 0,
+    waitingForReward = false,
+    rewardCheckStarted = false
 }
 
 local cache = {
@@ -125,6 +140,9 @@ local function sendSkipCommands()
 end
 
 local function useItem(itemName)
+    local npcData = ITEM_TO_NPC[itemName]
+    if not npcData then return false end
+    
     local character = player.Character
     local backpack = player:FindFirstChild("Backpack")
     
@@ -138,25 +156,46 @@ local function useItem(itemName)
     
     -- Equip the item first
     humanoid:EquipTool(item)
-    task.wait(0.5)  -- Increased wait time to ensure tool is properly equipped
+    task.wait(0.5)  -- Wait to ensure tool is properly equipped
     
-    -- Get the tool again after equipping (it might be in the character now)
-    item = character:FindFirstChild(itemName) or backpack:FindFirstChild(itemName)
-    if not item then return false end
-    
-    -- Try to use it by simulating a mouse click (Activate)
-    local success = pcall(function()
-        -- This simulates pressing the left mouse button while holding the tool
-        item:Activate()
-        task.wait(0.1)  -- Short wait to simulate button press
-        return true
-    end)
-    
-    -- Unequip after use
-    task.wait(0.3)
-    humanoid:UnequipTools()
-    
-    return success
+    -- For Equinox Seal and Aromatic Seagrass, use the RemoteFunction
+    if itemName == "Equinox Seal" or itemName == "Aromatic Seagrass" then
+        local success = pcall(function()
+            local torso = character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso") or character:FindFirstChild("HumanoidRootPart")
+            if not torso then return false end
+            
+            local args = {
+                [1] = npcData.remoteArg,
+                [2] = {
+                    [1] = npcData.spawnPosition,
+                    [2] = torso
+                }
+            }
+            
+            local remoteFunction = player:WaitForChild("RemoteFunction")
+            remoteFunction:InvokeServer(unpack(args))
+            return true
+        end)
+        
+        -- Unequip after use
+        task.wait(0.3)
+        humanoid:UnequipTools()
+        
+        return success
+    else
+        -- For Ominous Dark Egg, use Activate
+        local success = pcall(function()
+            item:Activate()
+            task.wait(0.1)
+            return true
+        end)
+        
+        -- Unequip after use
+        task.wait(0.3)
+        humanoid:UnequipTools()
+        
+        return success
+    end
 end
 
 local function checkNpcSpawned()
@@ -172,14 +211,15 @@ local function useSpawnItems()
     checkNpcSpawned()
     
     -- Use items only if corresponding NPC hasn't spawned
-    for itemName, npcName in pairs(ITEM_TO_NPC) do
+    for itemName, npcData in pairs(ITEM_TO_NPC) do
+        local npcName = npcData.name
         if not State.npcSpawned[npcName] and not State.itemsUsed[itemName] then
             print("Attempting to use item:", itemName, "to spawn NPC:", npcName)
             local success = useItem(itemName)
             if success then
                 State.itemsUsed[itemName] = true
                 print("Successfully used item:", itemName)
-                task.wait(2)  -- Increased wait time for NPC to spawn
+                task.wait(2)  -- Wait for NPC to spawn
                 checkNpcSpawned()  -- Re-check after using item
             else
                 print("Failed to use item:", itemName)
@@ -519,7 +559,7 @@ local function equipArcticCore()
 end
 
 local function attemptFire()
-    if not State.isRunning or State.specialMode or State.bossCompleted then 
+    if not State.isRunning or State.specialMode then 
         return 
     end
     if not State.playerAlive or not State.shootingEnabled then 
@@ -695,10 +735,6 @@ local function createPartyAndJoin()
 end
 
 local function attemptArcticTeleport()
-    if State.bossCompleted then 
-        return true
-    end
-    
     State.bossCompleted = true
     State.specialMode = true
     State.isRunning = false
@@ -799,12 +835,14 @@ local function farmingLoop()
                 if State.bossHasSpawned and bossStatus == "dead" and not State.bossCompleted then
                     -- Boss died, start checking for reward
                     State.bossCompleted = true
+                    State.bossDefeatedTime = now
+                    State.waitingForReward = true
                 end
                 
                 lastBossCheck = now
             end
             
-            if State.bossCompleted then
+            if State.waitingForReward then
                 -- Check for reward present
                 if now - lastRewardCheck > rewardCheckInterval then
                     local rewardStatus = checkRewardPresent()
@@ -812,6 +850,7 @@ local function farmingLoop()
                     if rewardStatus == "exists" and not State.rewardTaken then
                         collectReward()
                     elseif rewardStatus == "taken" then
+                        State.waitingForReward = false
                         attemptArcticTeleport()
                         break
                     end
@@ -819,8 +858,10 @@ local function farmingLoop()
                     lastRewardCheck = now
                 end
             else
-                -- Normal farming
-                attemptFire()
+                -- Normal farming - continue shooting even after boss death if not waiting for reward
+                if not State.bossCompleted then
+                    attemptFire()
+                end
             end
         else
             State.currentTarget = nil
@@ -834,6 +875,15 @@ local function onCharacterAdded(character)
     task.wait(2)
     
     if game.PlaceId == SPECIFIC_PLACE_ID then
+        -- First use spawn items before teleporting
+        if not State.itemsUsed["Equinox Seal"] and 
+           not State.itemsUsed["Aromatic Seagrass"] and 
+           not State.itemsUsed["Ominous Dark Egg"] then
+            task.wait(1)
+            useSpawnItems()
+            task.wait(1)  -- Wait for NPCs to spawn
+        end
+        
         -- Send skip command
         if not State.skipAllSaid then
             sendSkipCommands()
@@ -843,16 +893,6 @@ local function onCharacterAdded(character)
         task.wait(1)
         if not State.teleported then
             teleportToPlatform()
-        end
-        
-        -- Wait a bit for everything to load, then use spawn items
-        task.wait(3)
-        
-        -- Use spawn items only once when character is added
-        if not State.itemsUsed["Equinox Seal"] and 
-           not State.itemsUsed["Aromatic Seagrass"] and 
-           not State.itemsUsed["Ominous Dark Egg"] then
-            useSpawnItems()
         end
     end
     
@@ -947,7 +987,8 @@ return {
             RewardTaken = State.rewardTaken,
             PlatformCreated = State.platformCreated,
             Teleported = State.teleported,
-            DungeonAttempts = State.dungeonTeleportAttempts
+            DungeonAttempts = State.dungeonTeleportAttempts,
+            WaitingForReward = State.waitingForReward
         }
     end,
     
